@@ -110,30 +110,19 @@ class FlowMatchingEstimator(ConditionalVectorFieldEstimator):
         self.register_buffer("std_0", std_0_tensor)
 
     def _check_compose_baseline_compatible(self) -> None:
-        """Guard the unsupported gaussian_baseline + composed-standardization pair.
+        """Reject gaussian_baseline + composed standardization (mutually exclusive).
 
-        ``gaussian_baseline`` derives the velocity from the (original-space) data
-        statistics ``mean_0``/``std_0``; composed standardization instead maps
-        ``theta -> z`` so the network sees standardized inputs. The two are
-        mutually exclusive (see also the build-time guard in ``_wire_compose``).
-
-        The public build path refuses the pair up front; this runtime check is the
-        backstop for estimators assembled manually, or loaded from a checkpoint
-        that predates the build-time guard, where ``_compose_standardization`` is
-        re-activated alongside ``gaussian_baseline``.
+        ``gaussian_baseline`` derives the velocity from the original-space stats
+        ``mean_0``/``std_0``, while composed standardization feeds the network
+        standardized z. Checked once at build/load time, not per step.
         """
-        # ``gaussian_baseline`` is a plain Python bool, so checking it first lets
-        # the common path (and every ODE step) short-circuit before touching the
-        # ``_compose_standardization`` tensor buffer (whose truth test would force a
-        # device sync on CUDA).
-        if self.gaussian_baseline and bool(self._compose_standardization):
+        if self.gaussian_baseline and self.compose_enabled:
             raise ValueError(
-                "gaussian_baseline and composed standardization cannot be used "
+                "gaussian_baseline and compose_standardization cannot be used "
                 "together: the analytical baseline velocity is derived from "
                 "mean_0/std_0 in the original data space, while composed "
-                "standardization feeds the network standardized z (theta -> z). "
-                "Enable only one (set gaussian_baseline=False to use composed "
-                "standardization)."
+                "standardization feeds the network standardized z. Enable only one "
+                "(set gaussian_baseline=False to use composed standardization)."
             )
 
     def _get_time_dependent_stats(self, time: Tensor) -> Tuple[Tensor, Tensor]:
@@ -236,9 +225,6 @@ class FlowMatchingEstimator(ConditionalVectorFieldEstimator):
         Returns:
             The estimated vector field in original space.
         """
-        self._check_compose_baseline_compatible()
-        self._check_compose_internal_stats_unit()
-
         # Continue with standard processing (broadcast shapes etc.)
         batch_shape_input = input.shape[: -len(self.input_shape)]
         batch_shape_cond = condition.shape[: -len(self.condition_shape)]
@@ -313,13 +299,8 @@ class FlowMatchingEstimator(ConditionalVectorFieldEstimator):
         Returns:
             Loss value.
         """
-        self._check_compose_baseline_compatible()
-        self._check_compose_internal_stats_unit()
-
-        # Composed standardization (opt-in): the estimator is trained PURELY in
-        # z-space. Standardize theta -> z at the very top; everything below is
-        # unchanged. When the flag is off, this is a no-op (shift=0, scale=1).
-        if self._compose_standardization:
+        # Composed standardization (opt-in): train in z-space. No-op when off.
+        if self.compose_enabled:
             input = self.to_z(input)
 
         # Randomly sample time steps

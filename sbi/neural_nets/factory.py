@@ -84,6 +84,24 @@ embedding_net_warn_msg = """The passed embedding net will be moved to cpu for
                         constructing the net building function."""
 
 
+def _check_compose_z_score_theta(
+    compose_standardization: bool, z_score_theta: Optional[str]
+) -> None:
+    """Reject compose_standardization combined with a non-default theta-scoring.
+
+    ``compose_standardization=True`` overrides theta-scoring with per-dim
+    standardization, so only the default (``'independent'`` / ``None``) is
+    allowed. This is enforced here at the factory layer, where ``z_score_theta``
+    is unambiguous (the builder's ``z_score_x`` maps to theta-scoring for FMPE
+    but observation-scoring for NPSE).
+    """
+    if compose_standardization and z_score_theta != "independent":
+        raise ValueError(
+            "compose_standardization=True implies per-dim standardization; "
+            f"z_score_theta={z_score_theta!r} is not supported. Use 'independent'."
+        )
+
+
 def classifier_nn(
     model: str,
     z_score_theta: Optional[
@@ -401,6 +419,8 @@ def posterior_score_nn(
     Returns:
         Constructor function for NPSE.
     """
+    _check_compose_z_score_theta(compose_standardization, z_score_theta)
+
     # Map user-facing parameter names to internal names.
     mapped = dict(
         z_score_x=z_score_x,
@@ -485,6 +505,8 @@ def posterior_flow_nn(
     Returns:
         Constructor function for FMPE.
     """
+    _check_compose_z_score_theta(compose_standardization, z_score_theta)
+
     # Map user-facing parameter names to internal names.
     mapped = dict(
         z_score_x=z_score_theta,

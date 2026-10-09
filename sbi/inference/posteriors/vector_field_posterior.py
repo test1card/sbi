@@ -235,11 +235,9 @@ class VectorFieldPosterior(NeuralPosterior):
         x = self._x_else_default_x(x)
         x = reshape_to_batch_event(x, self.vector_field_estimator.condition_shape)
         is_iid = x.shape[0] > 1
-        # Composed standardization integrates the SDE/ODE in z-space; the iid and
-        # guidance score combinations evaluate the (theta-space) prior on the z-space
-        # state, which is not yet transformed. Guard explicitly instead of returning
-        # silently-wrong samples. (Single-observation sampling is fully supported.)
-        if self.vector_field_estimator._compose_standardization and (
+        # iid and guided sampling evaluate the theta-space prior on the untransformed
+        # z-state under compose. Guard rather than return silently-wrong samples.
+        if self.vector_field_estimator.compose_enabled and (
             is_iid or guidance_method is not None
         ):
             raise NotImplementedError(
@@ -413,11 +411,9 @@ class VectorFieldPosterior(NeuralPosterior):
                 "This may indicate numerical instability in the vector field."
             )
 
-        # Composed standardization (opt-in): the estimator samples in z-space.
-        # Unstandardize theta = shift + scale * z before returning so that
-        # rejection (within_support on the prior) and the final samples are in
-        # original theta space. No-op when the flag is off.
-        if self.vector_field_estimator._compose_standardization:
+        # Composed standardization (opt-in): unstandardize z -> theta so rejection
+        # and returned samples are in original theta space. No-op when off.
+        if self.vector_field_estimator.compose_enabled:
             samples = self.vector_field_estimator.from_z(samples)
 
         return samples
@@ -448,11 +444,9 @@ class VectorFieldPosterior(NeuralPosterior):
             torch.Size((num_samples,))
         )
 
-        # Composed standardization (opt-in): the ODE samples in z-space.
-        # Unstandardize theta = shift + scale * z before returning so that
-        # rejection (within_support on the prior) and the final samples are in
-        # original theta space. No-op when the flag is off.
-        if self.vector_field_estimator._compose_standardization:
+        # Composed standardization (opt-in): unstandardize z -> theta so rejection
+        # and returned samples are in original theta space. No-op when off.
+        if self.vector_field_estimator.compose_enabled:
             samples = self.vector_field_estimator.from_z(samples)
 
         return samples
@@ -483,10 +477,9 @@ class VectorFieldPosterior(NeuralPosterior):
         x = self._x_else_default_x(x)
         x = reshape_to_batch_event(x, self.vector_field_estimator.condition_shape)
         is_iid = x.shape[0] > 1
-        # See sample(): the iid score combination evaluates the theta-space prior on the
-        # z-space state under composed standardization. Guard rather than return wrong
-        # values; single-observation log_prob is exact (affine Jacobian correction).
-        if self.vector_field_estimator._compose_standardization and is_iid:
+        # See sample(): iid log_prob under compose is not yet transformed to z-space.
+        # Single-observation log_prob is exact (affine Jacobian correction).
+        if self.vector_field_estimator.compose_enabled and is_iid:
             raise NotImplementedError(
                 "compose_standardization does not yet support iid (x with batch>1) "
                 "log_prob. Use a single observation, or disable "
@@ -551,12 +544,9 @@ class VectorFieldPosterior(NeuralPosterior):
         Returns:
             Samples from the posteriors of shape (*sample_shape, B, *input_shape)
         """
-        # Composed standardization integrates the SDE/ODE in z-space. Batched
-        # sampling (and the AutoGaussCorrectedScoreFn it feeds, which builds
-        # theta-space precisions) is not yet transformed for z-space and would
-        # return silently-wrong samples. Guard explicitly. (Single-observation
-        # sampling via sample() is fully supported.)
-        if self.vector_field_estimator._compose_standardization:
+        # Batched sampling is not yet transformed for z-space under compose; guard
+        # rather than return silently-wrong samples. Use sample() for a single obs.
+        if self.vector_field_estimator.compose_enabled:
             raise NotImplementedError(
                 "compose_standardization does not yet support sample_batched "
                 "(batched / multi-observation sampling). Use a single observation "
@@ -693,7 +683,7 @@ class VectorFieldPosterior(NeuralPosterior):
         Returns:
             The MAP estimate.
         """
-        if self.vector_field_estimator._compose_standardization:
+        if self.vector_field_estimator.compose_enabled:
             raise NotImplementedError(
                 "MAP is not yet supported with compose_standardization. "
                 "The potential gradient is computed in standardized z-space, so "
